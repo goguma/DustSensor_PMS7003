@@ -14,7 +14,9 @@
 #define DEBUG_OUT Serial1 /*I need a FTDI board to check log*/
 
 // PMS_READ_INTERVAL (4:30 min) and PMS_READ_DELAY (30 sec) CAN'T BE EQUAL! Values are also used to detect sensor state.
-static const uint32_t PMS_READ_INTERVAL = 270000; //270 sec
+//static const uint32_t PMS_READ_INTERVAL = 270000; //270 sec
+static const uint32_t PMS_READ_INTERVAL = 265000; //270 sec
+//static const uint32_t PMS_READ_INTERVAL = 15000; //15 sec
 static const uint32_t PMS_READ_DELAY = 30000;
 
 // Default sensor state.
@@ -62,11 +64,25 @@ void setup()
 	dht.begin();
 	PMSSetup();
 
-	// Initialize Blynk GUI
-	getTempHumidity();
 	readPMSData();
-
+	getTempHumidity();
 	sendDataToThingSpeak(d, fd, 0.0, t, h);
+
+	DEBUG_OUT.print("Dust Level: ");
+	DEBUG_OUT.print(d);
+	DEBUG_OUT.println("㎍/㎥");
+
+	DEBUG_OUT.print("Fine Dust Level: ");
+	DEBUG_OUT.print(fd);
+	DEBUG_OUT.println("㎍/㎥");
+
+	DEBUG_OUT.print("Temperature: ");
+	DEBUG_OUT.print(t);
+	DEBUG_OUT.println(" Celsius");
+
+	DEBUG_OUT.print("Humidity: ");
+	DEBUG_OUT.print(h);
+	DEBUG_OUT.println(" %");
 
 	ESP.deepSleep(PMS_READ_INTERVAL * 1000);
 }
@@ -190,15 +206,15 @@ void sendDataToThingSpeak(float dustLevel, float fineDustLevel, float co2, float
 	{
 		//"184.106.153.149" or api.thingspeak.com
 		String postStr = thingSpeakApiKey;
-		postStr += "&dustLevel=";
+		postStr += "&field1=";
 		postStr += String(dustLevel);
-		postStr += "&fineDustLevel=";
+		postStr += "&field2=";
 		postStr += String(fineDustLevel);
-		postStr += "&co2=";
+		postStr += "&field3=";
 		postStr += String(co2);
-		postStr += "&temperature=";
+		postStr += "&field4=";
 		postStr += String(temperature);
-		postStr += "&humidity=";
+		postStr += "&field5=";
 		postStr += String(humidity);
 
 		client.print("POST /update HTTP/1.1\n");
@@ -210,14 +226,6 @@ void sendDataToThingSpeak(float dustLevel, float fineDustLevel, float co2, float
 		client.print(postStr.length());
 		client.print("\n\n");
 		client.print(postStr);
-
-		DEBUG_OUT.print("Temperature: ");
-		DEBUG_OUT.print(temperature);
-		DEBUG_OUT.println(" Celsius");
-
-		DEBUG_OUT.print("Humidity: ");
-		DEBUG_OUT.print(humidity);
-		DEBUG_OUT.println(" %");
 	}
 	else
 	{
