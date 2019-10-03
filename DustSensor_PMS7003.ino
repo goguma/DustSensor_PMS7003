@@ -6,6 +6,11 @@
 #include "my_secret.h"
 
 /*
+ * Common stuff
+ */
+#define SENSOR_GET_ITERATION_NUMBER 10
+
+/*
  * PMS stuff
  */
 // To use Deep Sleep connect RST to GPIO16 (D0) and uncomment below line.
@@ -41,7 +46,7 @@ char pass[] = MY_SECRET_PASSWORD;
 DHT dht(DHTPIN, DHTTYPE);
 float d, fd, c, t, h;
 unsigned long previousMillis = 0; // will store last temp was read
-const long interval = 2000;       // interval at which to read sensor
+const long interval = 2000;		  // interval at which to read sensor
 
 /*
  * thingspeak stuff
@@ -58,14 +63,16 @@ void setup()
 	//Serial.begin(115200);
 	//while (!Serial)
 	DEBUG_OUT.begin(9600);
+	while (!DEBUG_OUT)
+		;
 
 	thingSpeakSetup();
 
 	dht.begin();
 	PMSSetup();
 
-	readPMSData();
-	getTempHumidity();
+	readPMSData(SENSOR_GET_ITERATION_NUMBER);
+	getTempHumidity(SENSOR_GET_ITERATION_NUMBER);
 	sendDataToThingSpeak(d, fd, 0.0, t, h);
 
 	DEBUG_OUT.print("Dust Level: ");
@@ -109,76 +116,123 @@ void PMSSetup()
 	pms.wakeUp();
 }
 
-void readPMSData()
+void readPMSData(int iter)
 {
-  PMS::DATA data;
+	PMS::DATA data;
+	float temp_d = 0.0f, temp_fd = 0.0f;
+	int i;
+	int read_count = 0;
 
-  delay(PMS_READ_DELAY);
+	if (iter <= 0)
+		return;
 
-  // Clear buffer (removes potentially old data) before read. Some data could have been also sent before switching to passive mode.
-  while (Serial.available()) { Serial.read(); }
+	//delay(PMS_READ_DELAY); //for FAN's proper working
 
-  DEBUG_OUT.println("Send read request...");
-  pms.requestRead();
+	DEBUG_OUT.println("Waiting until PMS's fan work properly");
+	for (i= 0; i < PMS_READ_DELAY/1000; i++)
+	{
+		delay(1000);
+		DEBUG_OUT.print(".");
+	}
+	DEBUG_OUT.println("");
 
-  DEBUG_OUT.println("Reading data...");
-  if (pms.readUntil(data))
-  {
-	DEBUG_OUT.println();
+	// Clear buffer (removes potentially old data) before read. Some data could have been also sent before switching to passive mode.
+	while (Serial.available())
+	{
+		Serial.read();
+	}
 
-	DEBUG_OUT.print("PM 1.0 (ug/m3): ");
-	DEBUG_OUT.println(data.PM_AE_UG_1_0);
+	for (int i = 0; i < iter; i++)
+	{
+		DEBUG_OUT.println("Send read request...");
+		pms.requestRead();
 
-	DEBUG_OUT.print("PM 2.5 (ug/m3): ");
-	DEBUG_OUT.println(data.PM_AE_UG_2_5);
-	d = data.PM_AE_UG_2_5;
+		DEBUG_OUT.println("Reading data...");
+		if (pms.readUntil(data))
+		{
+			DEBUG_OUT.println();
 
-	DEBUG_OUT.print("PM 10.0 (ug/m3): ");
-	DEBUG_OUT.println(data.PM_AE_UG_10_0);
-	fd = data.PM_AE_UG_10_0;
+			DEBUG_OUT.print("PM 1.0 (ug/m3): ");
+			DEBUG_OUT.println(data.PM_AE_UG_1_0);
 
-	DEBUG_OUT.println();
-  }
-  else
-  {
-	DEBUG_OUT.println("No data.");
-  }
-  pms.sleep();
+			DEBUG_OUT.print("PM 2.5 (ug/m3): ");
+			DEBUG_OUT.println(data.PM_AE_UG_2_5);
+			temp_d += data.PM_AE_UG_2_5;
+
+			DEBUG_OUT.print("PM 10.0 (ug/m3): ");
+			DEBUG_OUT.println(data.PM_AE_UG_10_0);
+			temp_fd += data.PM_AE_UG_10_0;
+
+			DEBUG_OUT.println();
+			read_count++;
+		}
+		else
+		{
+			DEBUG_OUT.println("No data.");
+		}
+		delay(1000);
+	}
+
+	d = temp_d / read_count;
+	fd = temp_fd / read_count;
+
+	pms.sleep();
 }
 /*************************************************************************/
 
 /*
  * DHT stuff
  */
-void getTempHumidity()
+void getTempHumidity(int iter)
 {
 	// Wait at least 2 seconds seconds between measurements.
 	// if the difference between the current time and last time you read
 	// the sensor is bigger than the interval you set, read the sensor
 	// Works better than delay for things happening elsewhere also
-	unsigned long currentMillis = millis();
+	int i;
+	float temp_h = 0.0f;
+	float temp_t = 0.0f;
+	float sum_h = 0.0f;
+	float sum_t = 0.0f;
+	int read_count = 0;
 
-	if (currentMillis - previousMillis >= interval)
+	for (i = 0; i < iter; i++)
 	{
-		// save the last time you read the sensor
-		previousMillis = currentMillis;
+		unsigned long currentMillis = millis();
 
-		// Reading temperature for humidity takes about 250 milliseconds!
-		// Sensor readings may also be up to 2 seconds 'old' (it's a very slow sensor)
-		h = dht.readHumidity();    // Read humidity (percent)
-		t = dht.readTemperature(); // Read temperature as
-		// Check if any reads failed and exit early (to try again).
-		if (isnan(h) || isnan(t))
+		if (currentMillis - previousMillis >= interval)
 		{
-			DEBUG_OUT.println("Failed to read from DHT sensor!");
-			return;
+			// save the last time you read the sensor
+			previousMillis = currentMillis;
+
+			// Reading temperature for humidity takes about 250 milliseconds!
+			// Sensor readings may also be up to 2 seconds 'old' (it's a very slow sensor)
+			temp_h = dht.readHumidity();	// Read humidity (percent)
+			temp_t = dht.readTemperature(); // Read temperature as
+			// Check if any reads failed and exit early (to try again).
+			if (isnan(temp_h) || isnan(temp_t))
+			{
+				DEBUG_OUT.println("Failed to read from DHT sensor!");
+				continue;
+			}
+
+			DEBUG_OUT.print("humidity : ");
+			DEBUG_OUT.print(temp_h, 1);
+			DEBUG_OUT.print("\t\t");
+			DEBUG_OUT.print("Temperature : ");
+			DEBUG_OUT.println(temp_t, 1);
+
+			sum_h += temp_h;
+			sum_t += temp_t;
+
+			read_count++;
 		}
-		DEBUG_OUT.print("humidity : ");
-		DEBUG_OUT.print(h, 1);
-		DEBUG_OUT.print("\t\t");
-		DEBUG_OUT.print("Temperature : ");
-		DEBUG_OUT.println(t, 1);
+		delay(2000);
 	}
+
+	t = sum_t / read_count;
+	h = sum_h / read_count;
+
 }
 /*************************************************************************/
 
@@ -202,6 +256,7 @@ void thingSpeakSetup()
 
 void sendDataToThingSpeak(float dustLevel, float fineDustLevel, float co2, float temperature, float humidity)
 {
+	DEBUG_OUT.println("Sending Result Data to IoT Cloud");
 	if (client.connect(server, 80))
 	{
 		//"184.106.153.149" or api.thingspeak.com
@@ -233,4 +288,5 @@ void sendDataToThingSpeak(float dustLevel, float fineDustLevel, float co2, float
 	}
 
 	client.stop();
+	DEBUG_OUT.println("Done to send");
 }
