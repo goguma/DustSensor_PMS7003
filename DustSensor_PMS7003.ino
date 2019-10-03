@@ -1,27 +1,18 @@
-
 #include <Arduino.h>
 #include <DHT.h>
 #include <ESP8266WiFi.h>
 #include <PMS.h>
 #include "my_secret.h"
 
-/*
- * Common stuff
- */
-#define SENSOR_GET_ITERATION_NUMBER 10
-
-/*
- * PMS stuff
- */
 // To use Deep Sleep connect RST to GPIO16 (D0) and uncomment below line.
-#define DEEP_SLEEP
+// #define DEEP_SLEEP
+
 // GPIO2 (D4 pin on ESP-12E Development Board).
-#define DEBUG_OUT Serial1 /*I need a FTDI board to check log*/
+#define DEBUG_OUT Serial1
 
 // PMS_READ_INTERVAL (4:30 min) and PMS_READ_DELAY (30 sec) CAN'T BE EQUAL! Values are also used to detect sensor state.
-//static const uint32_t PMS_READ_INTERVAL = 270000; //270 sec
-static const uint32_t PMS_READ_INTERVAL = 265000; //270 sec
-//static const uint32_t PMS_READ_INTERVAL = 15000; //15 sec
+static const uint32_t PMS_READ_INTERVAL = 265000;
+//static const uint32_t PMS_READ_INTERVAL = 10000;
 static const uint32_t PMS_READ_DELAY = 30000;
 
 // Default sensor state.
@@ -46,7 +37,7 @@ char pass[] = MY_SECRET_PASSWORD;
 DHT dht(DHTPIN, DHTTYPE);
 float d, fd, c, t, h;
 unsigned long previousMillis = 0; // will store last temp was read
-const long interval = 2000;		  // interval at which to read sensor
+const long interval = 2000;       // interval at which to read sensor
 
 /*
  * thingspeak stuff
@@ -56,57 +47,20 @@ String thingSpeakApiKey = MY_SECRET_THING_SPEAK_WRITE_API_KEY;
 const char *server = "api.thingspeak.com";
 
 /*
- * Setup stuff
+ * Common stuff
  */
+#define SENSOR_GET_ITERATION_NUMBER 10
+
 void setup()
 {
-	//Serial.begin(115200);
-	//while (!Serial)
+	// GPIO1, GPIO3 (TX/RX pin on ESP-12E Development Board)
+	Serial.begin(PMS::BAUD_RATE);
 	DEBUG_OUT.begin(9600);
 	while (!DEBUG_OUT)
 		;
 
 	thingSpeakSetup();
-
 	dht.begin();
-	PMSSetup();
-
-	readPMSData(SENSOR_GET_ITERATION_NUMBER);
-	getTempHumidity(SENSOR_GET_ITERATION_NUMBER);
-	sendDataToThingSpeak(d, fd, 0.0, t, h);
-
-	DEBUG_OUT.print("Dust Level: ");
-	DEBUG_OUT.print(d);
-	DEBUG_OUT.println("㎍/㎥");
-
-	DEBUG_OUT.print("Fine Dust Level: ");
-	DEBUG_OUT.print(fd);
-	DEBUG_OUT.println("㎍/㎥");
-
-	DEBUG_OUT.print("Temperature: ");
-	DEBUG_OUT.print(t);
-	DEBUG_OUT.println(" Celsius");
-
-	DEBUG_OUT.print("Humidity: ");
-	DEBUG_OUT.print(h);
-	DEBUG_OUT.println(" %");
-
-	ESP.deepSleep(PMS_READ_INTERVAL * 1000);
-}
-
-void loop()
-{
-}
-
-/*************************************************************************/
-
-/*
- * PMS stuff
- */
-void PMSSetup()
-{
-	// GPIO1, GPIO3 (TX/RX pin on wemos d1 mini Development Board)
-	Serial.begin(PMS::BAUD_RATE);
 
 	// Switch to passive mode.
 	pms.passiveMode();
@@ -114,27 +68,74 @@ void PMSSetup()
 	// Default state after sensor power, but undefined after ESP restart e.g. by OTA flash, so we have to manually wake up the sensor for sure.
 	// Some logs from bootloader is sent via Serial port to the sensor after power up. This can cause invalid first read or wake up so be patient and wait for next read cycle.
 	pms.wakeUp();
+
+#ifdef DEEP_SLEEP
+	delay(PMS_READ_DELAY);
+	readData();
+	pms.sleep();
+	ESP.deepSleep(PMS_READ_INTERVAL * 1000);
+#endif // DEEP_SLEEP
 }
 
-void readPMSData(int iter)
+void loop()
+{
+#ifndef DEEP_SLEEP
+	static uint32_t timerLast = 0;
+
+	uint32_t timerNow = millis();
+	if (timerNow - timerLast >= timerInterval)
+	{
+		timerLast = timerNow;
+		timerCallback();
+		timerInterval = timerInterval == PMS_READ_DELAY ? PMS_READ_INTERVAL : PMS_READ_DELAY;
+	}
+
+	// Do other stuff...
+#endif // DEEP_SLEEP
+}
+
+#ifndef DEEP_SLEEP
+void timerCallback()
+{
+	if (timerInterval == PMS_READ_DELAY)
+	{
+		readData(SENSOR_GET_ITERATION_NUMBER);
+		DEBUG_OUT.println("Going to PMS sleep.");
+		pms.sleep();
+		getTempHumidity(SENSOR_GET_ITERATION_NUMBER);
+		sendDataToThingSpeak(d, fd, 0.0, t, h);
+
+		DEBUG_OUT.print("Dust Level: ");
+		DEBUG_OUT.print(d);
+		DEBUG_OUT.println("㎍/㎥");
+
+		DEBUG_OUT.print("Fine Dust Level: ");
+		DEBUG_OUT.print(fd);
+		DEBUG_OUT.println("㎍/㎥");
+
+		DEBUG_OUT.print("Temperature: ");
+		DEBUG_OUT.print(t);
+		DEBUG_OUT.println(" Celsius");
+
+		DEBUG_OUT.print("Humidity: ");
+		DEBUG_OUT.print(h);
+		DEBUG_OUT.println(" %");
+	}
+	else
+	{
+		DEBUG_OUT.println("Waking up.");
+		pms.wakeUp();
+	}
+}
+#endif // DEEP_SLEEP
+
+void readData(int iter)
 {
 	PMS::DATA data;
-	float temp_d = 0.0f, temp_fd = 0.0f;
 	int i;
+	float temp_fd = 0.0f;
+	float temp_d = 0.0f;
 	int read_count = 0;
-
-	if (iter <= 0)
-		return;
-
-	//delay(PMS_READ_DELAY); //for FAN's proper working
-
-	DEBUG_OUT.println("Waiting until PMS's fan work properly");
-	for (i= 0; i < PMS_READ_DELAY/1000; i++)
-	{
-		delay(1000);
-		DEBUG_OUT.print(".");
-	}
-	DEBUG_OUT.println("");
 
 	// Clear buffer (removes potentially old data) before read. Some data could have been also sent before switching to passive mode.
 	while (Serial.available())
@@ -142,7 +143,7 @@ void readPMSData(int iter)
 		Serial.read();
 	}
 
-	for (int i = 0; i < iter; i++)
+	for (i = 0; i < iter; i++)
 	{
 		DEBUG_OUT.println("Send read request...");
 		pms.requestRead();
@@ -157,11 +158,11 @@ void readPMSData(int iter)
 
 			DEBUG_OUT.print("PM 2.5 (ug/m3): ");
 			DEBUG_OUT.println(data.PM_AE_UG_2_5);
-			temp_d += data.PM_AE_UG_2_5;
+			temp_fd += data.PM_AE_UG_2_5;
 
 			DEBUG_OUT.print("PM 10.0 (ug/m3): ");
 			DEBUG_OUT.println(data.PM_AE_UG_10_0);
-			temp_fd += data.PM_AE_UG_10_0;
+			temp_d += data.PM_AE_UG_10_0;
 
 			DEBUG_OUT.println();
 			read_count++;
@@ -173,11 +174,10 @@ void readPMSData(int iter)
 		delay(1000);
 	}
 
-	d = temp_d / read_count;
 	fd = temp_fd / read_count;
-
-	pms.sleep();
+	d = temp_d / read_count;
 }
+
 /*************************************************************************/
 
 /*
@@ -207,7 +207,7 @@ void getTempHumidity(int iter)
 
 			// Reading temperature for humidity takes about 250 milliseconds!
 			// Sensor readings may also be up to 2 seconds 'old' (it's a very slow sensor)
-			temp_h = dht.readHumidity();	// Read humidity (percent)
+			temp_h = dht.readHumidity();    // Read humidity (percent)
 			temp_t = dht.readTemperature(); // Read temperature as
 			// Check if any reads failed and exit early (to try again).
 			if (isnan(temp_h) || isnan(temp_t))
@@ -232,7 +232,6 @@ void getTempHumidity(int iter)
 
 	t = sum_t / read_count;
 	h = sum_h / read_count;
-
 }
 /*************************************************************************/
 
